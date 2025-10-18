@@ -1,9 +1,13 @@
+# Copyright 2024 by UltrafunkAmsterdam (https://github.com/UltrafunkAmsterdam)
+# All rights reserved.
+# This file is part of the nodriver package.
+# and is released under the "GNU AFFERO GENERAL PUBLIC LICENSE".
+# Please see the LICENSE.txt file that should have been included as part of this package.
+
 from __future__ import annotations
 
 import asyncio
 import functools
-import itertools
-import json
 import logging
 import os
 import pathlib
@@ -11,7 +15,7 @@ import secrets
 import typing
 import warnings
 from pathlib import Path
-from typing import Any, Generator, List, Optional, Tuple, TypeVar, Union
+from typing import Any, Generator, List, Optional, Tuple, Union
 
 import nodriver.core.browser
 
@@ -164,138 +168,8 @@ class Tab(Connection):
         **kwargs,
     ):
         super().__init__(websocket_url, target, browser, **kwargs)
-        self.browser = browser
-
-        self.add_handler(
-            cdp.runtime.ExecutionContextCreated, self._execution_contexts_handler
-        )
-        self.add_handler(
-            cdp.runtime.ExecutionContextDestroyed, self._execution_contexts_handler
-        )
-        self.add_handler(
-            cdp.runtime.ExecutionContextsCleared, self._execution_contexts_handler
-        )
-
-        self.add_handler(cdp.page.FrameAttached, self._frame_handler)
-        self.add_handler(cdp.page.FrameDetached, self._frame_handler)
-        self.add_handler(cdp.page.FrameStartedLoading, self._frame_handler)
-        self.add_handler(cdp.page.FrameStoppedLoading, self._frame_handler)
-
-        self.execution_contexts: typing.Dict[str, ExecutionContext] = {}
-        # self.execution_contexts: List[ExecutionContext] = []
-        self.frames: typing.Dict[str, Frame] = {}
         self._dom = None
         self._window_id = None
-
-    @property
-    def frames_list(self) -> List[Frame]:
-        return list(self.frames.values())
-
-    @property
-    def execution_contexts_list(self) -> List[ExecutionContext]:
-        return list(self.execution_contexts.values())
-
-    async def _execution_contexts_handler(
-        self,
-        event: Union[
-            cdp.runtime.ExecutionContextsCleared,
-            cdp.runtime.ExecutionContextCreated,
-            cdp.runtime.ExecutionContextDestroyed,
-        ],
-        *args,
-        **kwargs,
-    ):
-
-        if type(event) is cdp.runtime.ExecutionContextCreated:
-            context = event.context
-            frame_id = context.aux_data.get("frameId")
-
-            try:
-                if context.id_ in self.execution_contexts:
-                    self.execution_contexts.__dict__.update(**vars(context))
-                else:
-                    execution_context = ExecutionContext(tab=self, **vars(context))
-                    self.execution_contexts[context.unique_id] = execution_context
-
-                frame: Frame = next(filter(lambda key: key == frame_id, self.frames))
-                if frame and context.unique_id in self.execution_contexts:
-                    self.frames[str(frame_id)].execution_contexts[context.unique_id] = (
-                        self.execution_contexts[context.unique_id]
-                    )
-
-            except StopIteration:
-                frame: None = None
-                return
-
-        elif type(event) is cdp.runtime.ExecutionContextDestroyed:
-            unique_id = event.execution_context_unique_id
-            for frame_id in self.frames.keys():
-                try:
-                    self.frames[str(frame_id)].execution_contexts.pop(unique_id)
-                except KeyError:
-                    pass
-
-        elif type(event) is cdp.runtime.ExecutionContextsCleared:
-            self.frames.clear()
-
-    async def _frame_handler(
-        self,
-        event: Union[
-            cdp.page.FrameAttached,
-            cdp.page.FrameDetached,
-            cdp.page.FrameStartedLoading,
-            cdp.page.FrameStoppedLoading,
-        ],
-        tab: Tab = None,
-    ):
-        """
-
-        :param event:
-        :type event:
-        :return:
-        :rtype:
-        """
-        ev_typ = type(event)
-        ev: ev_typ = event
-
-        if ev_typ is cdp.page.FrameAttached:
-            try:
-                frame = next(filter(lambda fid: ev.frame_id == fid, self.frames))
-            except:
-                frame = Frame(id_=ev.frame_id, parent_id=ev.parent_frame_id)
-                self.frames[str(ev.frame_id)] = frame
-
-            for exid in self.execution_contexts:
-                if exid not in frame.execution_contexts:
-                    frame.execution_contexts[exid] = self.execution_contexts[exid]
-                    frame.loading = True
-
-        if ev_typ is cdp.page.FrameDetached:
-            try:
-                # frame = next(filter(lambda fid: fid  ==  ev.frame_id, self.frames))
-                self.frames.pop(ev.frame_id)
-            except (KeyError,):
-                pass
-            return
-
-        if ev_typ is cdp.page.FrameStartedLoading:
-            try:
-                frame: Frame = self.frames[ev.frame_id]
-                if frame:
-                    frame.loading = True
-
-            except (StopIteration, KeyError):
-                frame = Frame(id_=ev.frame_id)
-                frame.loading = True
-                self.frames[str(frame.id_)] = frame
-
-        if ev_typ is cdp.page.FrameStoppedLoading:
-            try:
-                frame = self.frames[str(ev.frame_id)]
-                frame.loading = False
-            except (StopIteration, KeyError):
-                pass
-                # frame.loading = False
 
     @property
     def inspector_url(self):
@@ -320,6 +194,51 @@ class Tab(Connection):
         import webbrowser
 
         webbrowser.open(self.inspector_url)
+
+    async def feed_cdp(
+        self, cmd: Generator[dict[str, Any], dict[str, Any], Any]
+    ) -> asyncio.Future:
+        return await super()._send_oneshot(cmd)
+
+    async def _prepare_headless(self):
+
+        if getattr(self, "_prep_headless_done", None):
+            return
+        resp = await self._send_oneshot(
+            cdp.runtime.evaluate(
+                expression="navigator.userAgent",
+            )
+        )
+        if not resp:
+            return
+        response, error = resp
+        if response and response.value:
+            ua = response.value
+            await self._send_oneshot(
+                cdp.network.set_user_agent_override(
+                    user_agent=ua.replace("Headless", ""),
+                )
+            )
+        setattr(self, "_prep_headless_done", True)
+
+    async def _prepare_expert(self):
+        if getattr(self, "_prep_expert_done", None):
+            return
+        if self.browser:
+            await self._send_oneshot(cdp.page.enable())
+            await self._send_oneshot(
+                cdp.page.add_script_to_evaluate_on_new_document(
+                    """
+                    console.log("hooking attachShadow");
+                    Element.prototype._attachShadow = Element.prototype.attachShadow;
+                    Element.prototype.attachShadow = function () {
+                        console.log('calling hooked attachShadow')
+                        return this._attachShadow( { mode: "open" } );
+                    };"""
+                )
+            )
+
+        setattr(self, "_prep_expert_done", True)
 
     async def find(
         self,
@@ -469,6 +388,64 @@ class Tab(Connection):
             if loop.time() - now > timeout:
                 return items
             await self.sleep(0.5)
+        return items
+
+    async def sleep(self, t: float | int = 1):
+        if self.browser:
+            await asyncio.wait(
+                [
+                    asyncio.create_task(self.browser.update_targets()),
+                    asyncio.create_task(asyncio.sleep(t)),
+                ],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+    async def xpath(
+        self, xpath: str, timeout: float = 2.5
+    ) -> List[Optional[nodriver.Element]]:  # noqa
+        """
+        find elements by xpath string.
+        if not immediately found, retries are attempted until :ref:`timeout` is reached (default 2.5 seconds).
+        in case nothing is found, it returns an empty list. It will not raise.
+        this timeout mechanism helps when relying on some element to appear before continuing your script.
+
+
+        .. code-block:: python
+
+             # find all the inline scripts (script elements without src attribute )
+             await tab.xpath('//script[not(@src)]')
+
+             # or here, more complex, but my personal favorite to case-insensitive text search
+
+             await tab.xpath('//text()[ contains( translate(., "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"),"test")]')
+
+
+        :param xpath:
+        :type xpath: str
+        :param timeout: 2.5
+        :type timeout: float
+        :return:List[nodriver.Element] or []
+        :rtype:
+        """
+        items: List[Optional[nodriver.Element]] = []
+        try:
+            await self.send(cdp.dom.enable(), True)
+            items = await self.find_all(xpath, timeout=0)
+            if not items:
+                loop = asyncio.get_running_loop()
+                start_time = loop.time()
+                while not items:
+                    items = await self.find_all(xpath, timeout=0)
+                    await self.sleep(0.1)
+                    if loop.time() - start_time > timeout:
+                        break
+        finally:
+            try:
+                await self.send(cdp.dom.disable(), True)
+            except ProtocolException:
+                # for some strange reason, the call to dom.disable
+                # sometimes raises an exception that dom is not enabled.
+                pass
         return items
 
     async def get(
@@ -622,6 +599,7 @@ class Tab(Connection):
     ) -> List[element.Element]:
         """
         returns element which match the given text.
+        returns element which match the given text.
         please note: this may (or will) also return any other element (like inline scripts),
         which happen to contain that text.
 
@@ -725,10 +703,13 @@ class Tab(Connection):
         doc = await self.send(cdp.dom.get_document(-1, True))
         text = text.strip()
         search_id, nresult = await self.send(cdp.dom.perform_search(text, True))
-
-        node_ids = await self.send(cdp.dom.get_search_results(search_id, 0, nresult))
+        if nresult:
+            node_ids = await self.send(
+                cdp.dom.get_search_results(search_id, 0, nresult)
+            )
+        else:
+            node_ids = None
         await self.send(cdp.dom.discard_search_results(search_id))
-
         if not node_ids:
             node_ids = []
         items = []
@@ -829,8 +810,21 @@ class Tab(Connection):
         )
 
     async def evaluate(
-        self, expression: str, await_promise=False, return_by_value=True
-    ):
+        self, expression: str, await_promise=False, return_by_value=False
+    ) -> Union[
+        str,
+        Union[str, Any],
+        Tuple[cdp.runtime.RemoteObject, cdp.runtime.ExceptionDetails | None],
+    ]:
+
+        ser = cdp.runtime.SerializationOptions(
+            serialization="deep",
+            max_depth=10,
+            additional_parameters={"maxNodeDepth": 10, "includeShadowTree": "all"},
+        )
+        remote_object: cdp.runtime.RemoteObject = None
+        errors: cdp.runtime.ExceptionDetails = None
+
         remote_object, errors = await self.send(
             cdp.runtime.evaluate(
                 expression=expression,
@@ -838,18 +832,20 @@ class Tab(Connection):
                 await_promise=await_promise,
                 return_by_value=return_by_value,
                 allow_unsafe_eval_blocked_by_csp=True,
+                serialization_options=ser,
             )
         )
         if errors:
-            raise ProtocolException(errors)
-
+            return errors
         if remote_object:
             if return_by_value:
                 if remote_object.value:
                     return remote_object.value
-
             else:
-                return remote_object, errors
+                if remote_object.deep_serialized_value:
+                    return remote_object.deep_serialized_value.value
+
+        return remote_object
 
     async def js_dumps(
         self, obj_name: str, return_by_value: Optional[bool] = True
@@ -895,106 +891,106 @@ class Tab(Connection):
         """
         js_code_a = (
             """
-                                       function ___dump(obj, _d = 0) {
-                                           let _typesA = ['object', 'function'];
-                                           let _typesB = ['number', 'string', 'boolean'];
-                                           if (_d == 2) {
-                                               // console.log('maxdepth reached for ', obj);
-                                               return
-                                           }
-                                           let tmp = {}
-                                           for (let k in obj) {
-                                               if (obj[k] == window) continue;
-                                               let v;
-                                               try {
-                                                   if (obj[k] === null || obj[k] === undefined || obj[k] === NaN) {
-                                                        // console.log('obj[k] is null or undefined or Nan', k, '=>', obj[k])
-                                                       tmp[k] = obj[k];
-                                                       continue
+                                                   function ___dump(obj, _d = 0) {
+                                                       let _typesA = ['object', 'function'];
+                                                       let _typesB = ['number', 'string', 'boolean'];
+                                                       if (_d == 2) {
+                                                           // console.log('maxdepth reached for ', obj);
+                                                           return
+                                                       }
+                                                       let tmp = {}
+                                                       for (let k in obj) {
+                                                           if (obj[k] == window) continue;
+                                                           let v;
+                                                           try {
+                                                               if (obj[k] === null || obj[k] === undefined || obj[k] === NaN) {
+                                                                    // console.log('obj[k] is null or undefined or Nan', k, '=>', obj[k])
+                                                                   tmp[k] = obj[k];
+                                                                   continue
+                                                               }
+                                                           } catch (e) {
+                                                               tmp[k] = null;
+                                                               continue
+                                                           }
+                        
+                                                           if (_typesB.includes(typeof obj[k])) {
+                                                               tmp[k] = obj[k]
+                                                               continue
+                                                           }
+                        
+                                                           try {
+                                                               if (typeof obj[k] === 'function') {
+                                                                   tmp[k] = obj[k].toString()
+                                                                   continue
+                                                               }
+                        
+                        
+                                                               if (typeof obj[k] === 'object') {
+                                                                   tmp[k] = ___dump(obj[k], _d + 1);
+                                                                   continue
+                                                               }
+                        
+                        
+                                                           } catch (e) {}
+                        
+                                                           try {
+                                                               tmp[k] = JSON.stringify(obj[k])
+                                                               continue
+                                                           } catch (e) {
+                        
+                                                           }
+                                                           try {
+                                                               tmp[k] = obj[k].toString();
+                                                               continue
+                                                           } catch (e) {}
+                                                       }
+                                                       return tmp
                                                    }
-                                               } catch (e) {
-                                                   tmp[k] = null;
-                                                   continue
-                                               }
-            
-                                               if (_typesB.includes(typeof obj[k])) {
-                                                   tmp[k] = obj[k]
-                                                   continue
-                                               }
-            
-                                               try {
-                                                   if (typeof obj[k] === 'function') {
-                                                       tmp[k] = obj[k].toString()
-                                                       continue
+                        
+                                                   function ___dumpY(obj) {
+                                                       var objKeys = (obj) => {
+                                                           var [target, result] = [obj, []];
+                                                           while (target !== null) {
+                                                               result = result.concat(Object.getOwnPropertyNames(target));
+                                                               target = Object.getPrototypeOf(target);
+                                                           }
+                                                           return result;
+                                                       }
+                                                       return Object.fromEntries(
+                                                           objKeys(obj).map(_ => [_, ___dump(obj[_])]))
+                        
                                                    }
-            
-            
-                                                   if (typeof obj[k] === 'object') {
-                                                       tmp[k] = ___dump(obj[k], _d + 1);
-                                                       continue
-                                                   }
-            
-            
-                                               } catch (e) {}
-            
-                                               try {
-                                                   tmp[k] = JSON.stringify(obj[k])
-                                                   continue
-                                               } catch (e) {
-            
-                                               }
-                                               try {
-                                                   tmp[k] = obj[k].toString();
-                                                   continue
-                                               } catch (e) {}
-                                           }
-                                           return tmp
-                                       }
-            
-                                       function ___dumpY(obj) {
-                                           var objKeys = (obj) => {
-                                               var [target, result] = [obj, []];
-                                               while (target !== null) {
-                                                   result = result.concat(Object.getOwnPropertyNames(target));
-                                                   target = Object.getPrototypeOf(target);
-                                               }
-                                               return result;
-                                           }
-                                           return Object.fromEntries(
-                                               objKeys(obj).map(_ => [_, ___dump(obj[_])]))
-            
-                                       }
-                                       ___dumpY( %s )
-                               """
+                                                   ___dumpY( %s )
+                                           """
             % obj_name
         )
         js_code_b = (
             """
-                        ((obj, visited = new WeakSet()) => {
-                             if (visited.has(obj)) {
-                                 return {}
-                             }
-                             visited.add(obj)
-                             var result = {}, _tmp;
-                             for (var i in obj) {
-                                     try {
-                                         if (i === 'enabledPlugin' || typeof obj[i] === 'function') {
-                                             continue;
-                                         } else if (typeof obj[i] === 'object') {
-                                             _tmp = recurse(obj[i], visited);
-                                             if (Object.keys(_tmp).length) {
-                                                 result[i] = _tmp;
-                                             }
-                                         } else {
-                                             result[i] = obj[i];
+                                    ((obj, visited = new WeakSet()) => {
+                                         if (visited.has(obj)) {
+                                             return {}
                                          }
-                                     } catch (error) {
-                                         // console.error('Error:', error);
-                                     }
-                                 }
-                            return result;
-                        })(%s)
-                    """
+                                         visited.add(obj)
+                                         var result = {}, _tmp;
+                                         for (var i in obj) {
+                                                 try {
+                                                     if (i === 'enabledPlugin' || typeof obj[i] === 'function') {
+                                                         continue;
+                                                     } else if (typeof obj[i] === 'object') {
+                                                         _tmp = recurse(obj[i], visited);
+                                                         if (Object.keys(_tmp).length) {
+                                                             result[i] = _tmp;
+                                                         }
+                                                     } else {
+                                                         result[i] = obj[i];
+                                                     }
+                                                 } catch (error) {
+                                                     // console.error('Error:', error);
+                                                 }
+                                             }
+                                        return result;
+                                    })(%s)
+                                """
             % obj_name
         )
 
@@ -1224,12 +1220,44 @@ class Tab(Connection):
         )
 
     async def wait(self, t: Union[int, float] = None):
-        tree = await self.get_frame_tree()
-        tree_map = {str(f.id_): f for f in util.flatten_frame_tree(tree)}
-        for frame_id in tree_map:
-            if frame_id in self.frames:
-                self.frames[frame_id].__dict__.update(tree_map[frame_id].__dict__)
-        await super().wait(t)
+
+        # await self.browser.wait()
+
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        event = asyncio.Event()
+        wait_events = [
+            cdp.page.FrameStoppedLoading,
+            cdp.page.FrameDetached,
+            cdp.page.FrameNavigated,
+            cdp.page.LifecycleEvent,
+            cdp.page.LoadEventFired,
+        ]
+
+        handler = lambda ev: event.set()
+
+        self.add_handler(wait_events, handler=handler)
+        try:
+            if not t:
+                t = 0.5
+                done, pending = await asyncio.wait(
+                    [
+                        asyncio.ensure_future(event.wait()),
+                        asyncio.ensure_future(asyncio.sleep(t)),
+                    ],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+
+                [p.cancel() for p in pending]
+
+        finally:
+            self.remove_handler(wait_events, handler=handler)
+        #         await asyncio.wait_for()
+        #     except asyncio.TimeoutError:
+        #         if isinstance(t, (int, float)):
+        #             # explicit time is given, which is now passed
+        #             # so bail out early
+        #             return
 
     def __await__(self):
         return self.wait().__await__()
@@ -1404,7 +1432,7 @@ class Tab(Connection):
         path.write_bytes(data_bytes)
         return str(path)
 
-    async def set_download_path(self, path: PathLike):
+    async def set_download_path(self, path: Union[str, PathLike]):
         """
         sets the download path and allows downloads
         this is required for any download function to work (well not entirely, since when unset we set a default folder)
@@ -1414,6 +1442,8 @@ class Tab(Connection):
         :return:
         :rtype:
         """
+        path = Path(path)
+        path.mkdir(parents=True, exist_ok=True)
         await self.send(
             cdp.browser.set_download_behavior(
                 behavior="allow", download_path=str(path.resolve())
@@ -1556,34 +1586,45 @@ class Tab(Connection):
     async def get_frame_resource_urls(self) -> List[str]:
         """
         gets the urls of resources
-        :param urls_only:
-        :type urls_only:
         :return:
         :rtype:
         """
         _tree = await self.get_frame_resource_tree()
-        return functools.reduce(
-            lambda a, b: a + [b[1].url], util.flatten_frame_tree_resources(_tree), []
-        )
-        # return functools.reduce(
-        #     lambda a, b: a + b[1], util.flatten_frame_tree_resources(_tree), [])
+        return [
+            x
+            for x in functools.reduce(
+                lambda a, b: a + [b[1].url if isinstance(b, tuple) else ""],
+                util.flatten_frame_tree_resources(_tree),
+                [],
+            )
+            if x
+        ]
 
     async def search_frame_resources(
         self, query: str
-    ) -> Dict[str, List[cdp.debugger.SearchMatch]]:
-        list_of_tuples = list(
-            util.flatten_frame_tree_resources(await self.get_frame_resource_tree())
-        )
-        results = {}
-        for frame, resource in list_of_tuples:
-            results[resource.url] = await self.send(
-                cdp.page.search_in_resource(
-                    frame_id=frame.id_, url=resource.url, query=query
-                )
+    ) -> typing.Dict[str, List[cdp.debugger.SearchMatch]]:
+        try:
+            await self._send_oneshot(cdp.page.enable())
+            list_of_tuples = list(
+                util.flatten_frame_tree_resources(await self.get_frame_resource_tree())
             )
+            results = {}
+            for item in list_of_tuples:
+                if not isinstance(item, tuple):
+                    continue
+                frame, resource = item
+                res = await self.send(
+                    cdp.page.search_in_resource(
+                        frame_id=frame.id_, url=resource.url, query=query
+                    )
+                )
+                if not res:
+                    continue
+                results[resource.url] = res
+        finally:
+            await self._send_oneshot(cdp.page.disable())
 
         return results
-        # return await asyncio.gather(*tasks)
 
     async def verify_cf(self, template_image: str = None, flash=False):
         """
@@ -1621,13 +1662,13 @@ class Tab(Connection):
                             it is also being detected
                             """
             )
-        x, y = await self.template_location(template_img=template_image)
+        x, y = await self.template_location(template_image=template_image)
         await self.mouse_click(x, y)
         if flash:
             await self.flash_point(x, y)
 
     async def template_location(
-        self, template_img: PathLike = None
+        self, template_image: PathLike = None
     ) -> Union[Tuple[int, int], None]:
         """
         attempts to find the location of given template image in the current viewport
@@ -1650,8 +1691,8 @@ class Tab(Connection):
             :alt: example template image
 
 
-        :param template_img:
-        :type template_img:
+        :param template_image:
+        :type template_image:
         :return:
         :rtype:
         """
@@ -1671,19 +1712,19 @@ class Tab(Connection):
             return
         try:
 
-            if template_img:
-                template_img = Path(template_img)
-                if not template_img.exists():
+            if template_image:
+                template_image = Path(template_image)
+                if not template_image.exists():
                     raise FileNotFoundError(
                         "%s was not found in the current location : %s"
-                        % (template_img, os.getcwd())
+                        % (template_image, os.getcwd())
                     )
             await self.save_screenshot("screen.jpg")
             await self.sleep(0.05)
             im = cv2.imread("screen.jpg")
             im_gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
-            if template_img:
-                template = cv2.imread(str(template_img))
+            if template_image:
+                template = cv2.imread(str(template_image))
             else:
                 with open("cf_template.png", "w+b") as fh:
                     fh.write(util.get_cf_template())
@@ -1699,18 +1740,21 @@ class Tab(Connection):
             cy = (ys + ye) // 2
             return cx, cy
         except (TypeError, OSError, PermissionError):
+            pass  # ignore these exceptions
+        except:  # noqa - don't ignore other exceptions
             raise
         finally:
             try:
                 os.unlink("screen.jpg")
             except:
                 logger.warning("could not unlink temporary screenshot")
-            if template_img:
-                return
-            try:
-                os.unlink("cf_template.png")
-            except:  # noqa
-                logger.warning("could not unlink template file cf_template.png")
+            if template_image:
+                pass
+            else:
+                try:
+                    os.unlink("cf_template.png")
+                except:  # noqa
+                    logger.warning("could not unlink template file cf_template.png")
 
     async def bypass_insecure_connection_warning(self):
         """
@@ -1746,6 +1790,20 @@ class Tab(Connection):
         await self.send(cdp.input_.dispatch_mouse_event("mouseReleased", x=x, y=y))
         if flash:
             await self.flash_point(x, y)
+
+    async def scroll_bottom_reached(self):
+        """
+        returns True if scroll is at the bottom of the page
+        handy when you need to scroll over paginated pages of different lengths
+        :return:
+        :rtype:
+        """
+
+        res = await self.evaluate(
+            "document.body.offsetHeight - window.innerHeight == window.scrollY"
+        )
+        if res:
+            return res[0].value
 
     async def mouse_click(
         self,
@@ -1934,163 +1992,124 @@ class Tab(Connection):
         return s
 
 
-from .connection import Transaction
-
-
-class TargetTransaction(Transaction):
-    session_id: cdp.target.SessionID
-
-    def __init__(self, cdp_obj: Generator, session_id: cdp.target.SessionID):
-        """
-        :param cdp_obj:
-        """
-        self.session_id = session_id
-        super().__init__(cdp_obj=cdp_obj)
-
-    @property
-    def message(self):
-        return json.dumps(
-            {
-                "method": self.method,
-                "params": self.params,
-                "id": self.id,
-                "sessionId": self.session_id,
-            }
-        )
-
-
-class TargetSession:
-
-    def __init__(self, tab: Tab):
-        self._tab = tab
-        self._browser = tab.browser
-        self._session_id = None
-        self._target_id = None
-
-    async def create_session(
-        self, target: Union[cdp.target.TargetID, cdp.target.TargetInfo]
-    ):
-        if isinstance(target, cdp.target.TargetID):
-            target = await self._tab.send(cdp.target.get_target_info(target))
-
-        self._target_id: cdp.target.TargetID = await self._tab.send(
-            cdp.target.create_target(url="")
-        )
-        self._session_id: cdp.target.SessionID = await self._tab.send(
-            cdp.target.attach_to_target(self._target_id, flatten=True)
-        )
-
-    async def send(self, cdp_obj: Generator[dict[str, Any], dict[str, Any], Any]):
-        tx = TargetTransaction(cdp_obj, self._session_id)
-        tx.id = next(self._tab.__count__)
-        self._tab.mapper.update({tx.id: tx})
-        return await self._tab.send(
-            cdp.target.send_message_to_target(
-                json.dumps(tx.message), self._session_id, target_id=self._target_id
-            )
-        )
-
-    #
-    #     """
-    #     targetPage._targetId =
-    #         (await dp.Target.createTarget(params)).result.targetId;
-    #
-    #     const sessionId = (await dp.Target.attachToTarget({
-    #                         targetId: targetPage._targetId,
-    #                         flatten: true,
-    #                       })).result.sessionId;
-    #     targetPage._session = browserSession.createSession(sessionId);
-    #     :param tab:
-    #     :type tab:
-    #     :return:
-    #     :rtype:
-    # """
-
-
-async def click_cf_checkbox(tab: Tab):
-    return await tab.evaluate(
-        """
-        [...document.querySelectorAll('*')].filter( e => e.shadowRoot)?.[0].shadowRoot.children[0].contentDocument.children[0].children[1].shadowRoot.children[1].children[0].querySelector('label')""",
-        return_by_value=False,
-    )
-
-
-async def click_cf_label(tab: Tab):
-    obj, _ = await click_cf_checkbox(tab)
-    if obj and obj.object_id:
-        arguments = [cdp.runtime.CallArgument(object_id=obj.object_id)]
-        return await tab.send(
-            cdp.runtime.call_function_on(
-                "(el) => el.click()",
-                object_id=obj.object_id,
-                arguments=arguments,
-                await_promise=True,
-                user_gesture=True,
-                return_by_value=True,
-            )
-        )
-
-
-class Frame(cdp.page.Frame):
-    execution_contexts: typing.Dict[str, ExecutionContext] = {}
-
-    def __init__(self, id_: cdp.page.FrameId, **kw):
-        none_gen = itertools.repeat(None)
-        param_names = util.get_all_param_names(self.__class__)
-        param_names.remove("execution_contexts")
-        for k in kw:
-            param_names.remove(k)
-        params = dict(zip(param_names, none_gen))
-        params.update({"id_": id_, **kw})
-        super().__init__(**params)
-
-
-class ExecutionContext(dict):
-    id: cdp.runtime.ExecutionContextId
-    frame_id: str
-    unique_id: str
-    _tab: Tab
-
-    def __init__(self, *a, **kw):
-        super().__init__()
-        super().__setattr__("__dict__", self)
-        d: typing.Dict[str, Union[Tab, str]] = dict(*a, **kw)
-        self._tab: Tab = d.pop("tab", None)
-        self.__dict__.update(d)
-
-    def __repr__(self):
-        return "<ExecutionContext (\n{}\n)".format(
-            "".join(f"\t{k} = {v}\n" for k, v in super().items() if k not in ("_tab"))
-        )
-
-    async def evaluate(
-        self,
-        expression,
-        allow_unsafe_eval_blocked_by_csp: bool = True,
-        await_promises: bool = False,
-        generate_preview: bool = False,
-    ):
-        try:
-            raw = await self._tab.send(
-                cdp.runtime.evaluate(
-                    expression=expression,
-                    context_id=self.get("id_"),
-                    generate_preview=generate_preview,
-                    return_by_value=False,
-                    allow_unsafe_eval_blocked_by_csp=allow_unsafe_eval_blocked_by_csp,
-                    await_promise=await_promises,
-                )
-            )
-            if raw:
-                remote_object, errors = raw
-                if errors:
-                    raise ProtocolException(errors)
-
-                if remote_object:
-                    return remote_object
-
-                # else:
-                #     return remote_object, errors
-
-        except:  # noqa
-            raise
+#
+# from .connection import Transaction
+#
+#
+# class TargetTransaction(Transaction):
+#     session_id: cdp.target.SessionID
+#
+#     def __init__(self, cdp_obj: Generator, session_id: cdp.target.SessionID):
+#         """
+#         :param cdp_obj:
+#         """
+#         self.session_id = session_id
+#         super().__init__(cdp_obj=cdp_obj)
+#
+#     @property
+#     def message(self):
+#         return json.dumps(
+#             {
+#                 "method": self.method,
+#                 "params": self.params,
+#                 "id": self.id,
+#                 "sessionId": self.session_id,
+#             }
+#         )
+#
+#
+# class TargetSession:
+#
+#     def __init__(self, tab: Tab):
+#         self._tab = tab
+#         self._browser = tab.browser
+#         self._session_id = None
+#         self._target_id = None
+#
+#     async def create_session(
+#             self, target: Union[cdp.target.TargetID, cdp.target.TargetInfo]
+#     ):
+#         if isinstance(target, cdp.target.TargetID):
+#             target = await self._tab.send(cdp.target.get_target_info(target))
+#
+#         self._target_id: cdp.target.TargetID = await self._tab.send(
+#             cdp.target.create_target(url="")
+#         )
+#         self._session_id: cdp.target.SessionID = await self._tab.send(
+#             cdp.target.attach_to_target(self._target_id, flatten=True)
+#         )
+#
+#     async def send(self, cdp_obj: Generator[dict[str, Any], dict[str, Any], Any]):
+#         tx = TargetTransaction(cdp_obj, self._session_id)
+#         tx.id = next(self._tab.__count__)
+#         self._tab.mapper.update({tx.id: tx})
+#         return await self._tab.send(
+#             cdp.target.send_message_to_target(
+#                 json.dumps(tx.message), self._session_id, target_id=self._target_id
+#             )
+#         )
+#
+# #
+# # class Frame(cdp.page.Frame):
+# #     execution_contexts: typing.Dict[str, ExecutionContext] = {}
+# #
+# #     def __init__(self, id_: cdp.page.FrameId, **kw):
+# #         none_gen = itertools.repeat(None)
+# #         param_names = util.get_all_param_names(self.__class__)
+# #         param_names.remove("execution_contexts")
+# #         for k in kw:
+# #             param_names.remove(k)
+# #         params = dict(zip(param_names, none_gen))
+# #         params.update({"id_": id_, **kw})
+# #         super().__init__(**params)
+#
+# #
+# # class ExecutionContext(dict):
+# #     id: cdp.runtime.ExecutionContextId
+# #     frame_id: str
+# #     unique_id: str
+# #     _tab: Tab
+# #
+# #     def __init__(self, *a, **kw):
+# #         super().__init__()
+# #         super().__setattr__("__dict__", self)
+# #         d: typing.Dict[str, Union[Tab, str]] = dict(*a, **kw)
+# #         self._tab: Tab = d.pop("tab", None)
+# #         self.__dict__.update(d)
+# #
+# #     def __repr__(self):
+# #         return "<ExecutionContext (\n{}\n)".format(
+# #             "".join(f"\t{k} = {v}\n" for k, v in super().items() if k not in ("_tab"))
+# #         )
+# #
+# #     async def evaluate(
+# #             self,
+# #             expression,
+# #             allow_unsafe_eval_blocked_by_csp: bool = True,
+# #             await_promises: bool = False,
+# #             generate_preview: bool = False,
+# #     ):
+# #         try:
+# #             raw = await self._tab.send(
+# #                 cdp.runtime.evaluate(
+# #                     expression=expression,
+# #                     context_id=self.get("id_"),
+# #                     generate_preview=generate_preview,
+# #                     return_by_value=False,
+# #                     allow_unsafe_eval_blocked_by_csp=allow_unsafe_eval_blocked_by_csp,
+# #                     await_promise=await_promises,
+# #                 )
+# #             )
+# #             if raw:
+# #                 remote_object, errors = raw
+# #                 if errors:
+# #                     raise ProtocolException(errors)
+# #
+# #                 if remote_object:
+# #                     return remote_object
+# #
+# #                 # else:
+# #                 #     return remote_object, errors
+# #
+# #         except:  # noqa
+# #             raise

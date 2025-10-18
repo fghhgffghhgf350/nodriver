@@ -21,20 +21,20 @@ arguments to other commands.
 The following types are the replica of
 [https://crsrc.org/c/chrome/browser/web_applications/proto/web_app_os_integration_state.proto;drc=9910d3be894c8f142c977ba1023f30a656bc13fc;l=67](https://crsrc.org/c/chrome/browser/web_applications/proto/web_app_os_integration_state.proto;drc=9910d3be894c8f142c977ba1023f30a656bc13fc;l=67)
 
-#### media_type *: [`str`](https://docs.python.org/3/library/stdtypes.html#str)*
+#### media_type*: [`str`](https://docs.python.org/3/library/stdtypes.html#str)*
 
 New name of the mimetype according to
 [https://www.iana.org/assignments/media-types/media-types.xhtml](https://www.iana.org/assignments/media-types/media-types.xhtml)
 
-#### file_extensions *: [`List`](https://docs.python.org/3/library/typing.html#typing.List)[[`str`](https://docs.python.org/3/library/stdtypes.html#str)]*
+#### file_extensions*: [`List`](https://docs.python.org/3/library/typing.html#typing.List)[[`str`](https://docs.python.org/3/library/stdtypes.html#str)]*
 
 ### *class* FileHandler(action, accepts, display_name)
 
-#### action *: [`str`](https://docs.python.org/3/library/stdtypes.html#str)*
+#### action*: [`str`](https://docs.python.org/3/library/stdtypes.html#str)*
 
-#### accepts *: [`List`](https://docs.python.org/3/library/typing.html#typing.List)[[`FileHandlerAccept`](#nodriver.cdp.pwa.FileHandlerAccept)]*
+#### accepts*: [`List`](https://docs.python.org/3/library/typing.html#typing.List)[[`FileHandlerAccept`](#nodriver.cdp.pwa.FileHandlerAccept)]*
 
-#### display_name *: [`str`](https://docs.python.org/3/library/stdtypes.html#str)*
+#### display_name*: [`str`](https://docs.python.org/3/library/stdtypes.html#str)*
 
 ### *class* DisplayMode(value, names=None, \*, module=None, qualname=None, type=None, start=1, boundary=None)
 
@@ -69,8 +69,8 @@ See the comment of each parameter.
 
 * **Parameters:**
   * **manifest_id** ([`str`](https://docs.python.org/3/library/stdtypes.html#str)) – 
-  * **link_capturing** ([`Optional`](https://docs.python.org/3/library/typing.html#typing.Optional)[[`bool`](https://docs.python.org/3/library/functions.html#bool)]) –  *(Optional)* If user allows the links clicked on by the user in the app’s scope, or extended scope if the manifest has scope extensions and the flags ``DesktopPWAsLinkCapturingWithScopeExtensions``` and ```WebAppEnableScopeExtensions`` are enabled.  Note, the API does not support resetting the linkCapturing to the initial value, uninstalling and installing the web app again will reset it.  TODO(crbug.com/339453269): Setting this value on ChromeOS is not supported yet.
-  * **display_mode** ([`Optional`](https://docs.python.org/3/library/typing.html#typing.Optional)[[`DisplayMode`](#nodriver.cdp.pwa.DisplayMode)]) –  *(Optional)*
+  * **link_capturing** ([`Optional`](https://docs.python.org/3/library/typing.html#typing.Optional)[[`bool`](https://docs.python.org/3/library/functions.html#bool)]) – *(Optional)* If user allows the links clicked on by the user in the app’s scope, or extended scope if the manifest has scope extensions and the flags ``DesktopPWAsLinkCapturingWithScopeExtensions``` and ```WebAppEnableScopeExtensions`` are enabled.  Note, the API does not support resetting the linkCapturing to the initial value, uninstalling and installing the web app again will reset it.  TODO(crbug.com/339453269): Setting this value on ChromeOS is not supported yet.
+  * **display_mode** ([`Optional`](https://docs.python.org/3/library/typing.html#typing.Optional)[[`DisplayMode`](#nodriver.cdp.pwa.DisplayMode)]) – *(Optional)*
 * **Return type:**
   [`Generator`](https://docs.python.org/3/library/typing.html#typing.Generator)[[`Dict`](https://docs.python.org/3/library/typing.html#typing.Dict)[[`str`](https://docs.python.org/3/library/stdtypes.html#str), [`Any`](https://docs.python.org/3/library/typing.html#typing.Any)], [`Dict`](https://docs.python.org/3/library/typing.html#typing.Dict)[[`str`](https://docs.python.org/3/library/stdtypes.html#str), [`Any`](https://docs.python.org/3/library/typing.html#typing.Any)], [`None`](https://docs.python.org/3/library/constants.html#None)]
 
@@ -89,20 +89,37 @@ Returns the following OS state for the given manifest id.
 
 ### install(manifest_id, install_url_or_bundle_url=None)
 
-Installs the given manifest identity, optionally using the given install_url
-or IWA bundle location.
+Installs the given manifest identity, optionally using the given installUrlOrBundleUrl
 
-TODO(crbug.com/337872319) Support IWA to meet the following specific
-requirement.
-IWA-specific install description: If the manifest_id is isolated-app://,
-install_url_or_bundle_url is required, and can be either an http(s) URL or
-file:// URL pointing to a signed web bundle (.swbn). The .swbn file’s
-signing key must correspond to manifest_id. If Chrome is not in IWA dev
+IWA-specific install description:
+manifestId corresponds to isolated-app:// + web_package::SignedWebBundleId
+
+File installation mode:
+The installUrlOrBundleUrl can be either [file://](file://) or http(s):// pointing
+to a signed web bundle (.swbn). In this case SignedWebBundleId must correspond to
+The .swbn file’s signing key.
+
+Dev proxy installation mode:
+installUrlOrBundleUrl must be http(s):// that serves dev mode IWA.
+web_package::SignedWebBundleId must be of type dev proxy.
+
+The advantage of dev proxy mode is that all changes to IWA
+automatically will be reflected in the running app without
+reinstallation.
+
+To generate bundle id for proxy mode:
+1. Generate 32 random bytes.
+2. Add a specific suffix at the end following the documentation
+
+> [https://github.com/WICG/isolated-web-apps/blob/main/Scheme.md#suffix](https://github.com/WICG/isolated-web-apps/blob/main/Scheme.md#suffix)
+1. Encode the entire sequence using Base32 without padding.
+
+If Chrome is not in IWA dev
 mode, the installation will fail, regardless of the state of the allowlist.
 
 * **Parameters:**
   * **manifest_id** ([`str`](https://docs.python.org/3/library/stdtypes.html#str)) – 
-  * **install_url_or_bundle_url** ([`Optional`](https://docs.python.org/3/library/typing.html#typing.Optional)[[`str`](https://docs.python.org/3/library/stdtypes.html#str)]) –  *(Optional)* The location of the app or bundle overriding the one derived from the manifestId.
+  * **install_url_or_bundle_url** ([`Optional`](https://docs.python.org/3/library/typing.html#typing.Optional)[[`str`](https://docs.python.org/3/library/stdtypes.html#str)]) – *(Optional)* The location of the app or bundle overriding the one derived from the manifestId.
 * **Return type:**
   [`Generator`](https://docs.python.org/3/library/typing.html#typing.Generator)[[`Dict`](https://docs.python.org/3/library/typing.html#typing.Dict)[[`str`](https://docs.python.org/3/library/stdtypes.html#str), [`Any`](https://docs.python.org/3/library/typing.html#typing.Any)], [`Dict`](https://docs.python.org/3/library/typing.html#typing.Dict)[[`str`](https://docs.python.org/3/library/stdtypes.html#str), [`Any`](https://docs.python.org/3/library/typing.html#typing.Any)], [`None`](https://docs.python.org/3/library/constants.html#None)]
 
@@ -114,7 +131,7 @@ can be used to attach to via Target.attachToTarget or similar APIs.
 
 * **Parameters:**
   * **manifest_id** ([`str`](https://docs.python.org/3/library/stdtypes.html#str)) – 
-  * **url** ([`Optional`](https://docs.python.org/3/library/typing.html#typing.Optional)[[`str`](https://docs.python.org/3/library/stdtypes.html#str)]) –  *(Optional)*
+  * **url** ([`Optional`](https://docs.python.org/3/library/typing.html#typing.Optional)[[`str`](https://docs.python.org/3/library/stdtypes.html#str)]) – *(Optional)*
 * **Return type:**
   [`Generator`](https://docs.python.org/3/library/typing.html#typing.Generator)[[`Dict`](https://docs.python.org/3/library/typing.html#typing.Dict)[[`str`](https://docs.python.org/3/library/stdtypes.html#str), [`Any`](https://docs.python.org/3/library/typing.html#typing.Any)], [`Dict`](https://docs.python.org/3/library/typing.html#typing.Dict)[[`str`](https://docs.python.org/3/library/stdtypes.html#str), [`Any`](https://docs.python.org/3/library/typing.html#typing.Any)], [`TargetID`](target.md#nodriver.cdp.target.TargetID)]
 * **Returns:**
